@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kanban Board</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" integrity="sha512-9usAa10IRO0HhonpyAIVpjrylPvoDwiPUiKdWk5t3PyolY1cOd4DSE0Ga+ri4AuTroPR5aQvXU9xC6qOPnzFeg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        html, body { height: 100%; font-family: 'Inter', sans-serif; }
+
+        /* Task Dragging */
+        .task.dragging { opacity: 0.5; border: 2px dashed #cbd5e1; }
+        .tasks-container.drag-over { background-color: #334155; border: 2px dashed #94a3b8; }
+
+        /* List Dragging */
+        .kanban-list.dragging-list { opacity: 0.6; border: 2px dashed #60a5fa; /* blue-400 */ transform: rotate(2deg); }
+        /* Placeholder for visual drop indication */
+        .drop-placeholder {
+            background-color: rgba(66, 153, 225, 0.2); /* blue-500 with opacity */
+            border: 2px dashed #60a5fa; /* blue-400 */
+            border-radius: 0.5rem; /* rounded-lg */
+            height: 100px; /* Example height */
+            flex: 0 0 300px; /* Match list width */
+            margin: 0 0.5rem; /* Match space-x-4 / 2 */
+            align-self: stretch; /* Stretch to container height */
+        }
+
+
+        #listsContainer {
+            display: flex;
+            overflow-x: auto;
+            overflow-y: hidden;
+            height: calc(100vh - 150px); /* Adjust as needed */
+            padding-bottom: 20px;
+            align-items: flex-start; /* Align lists to the top */
+        }
+
+        .kanban-list {
+            flex: 0 0 300px;
+            max-height: 100%;
+            overflow-y: auto;
+            cursor: grab; /* Indicate list is draggable */
+        }
+         .kanban-list.dragging-list {
+            cursor: grabbing;
+        }
+        .list-header {
+             cursor: grab; /* Make header the drag handle */
+        }
+        .kanban-list.dragging-list .list-header {
+             cursor: grabbing;
+        }
+
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-slate-900 text-slate-200 flex flex-col h-screen">
+
+    <header class="p-4 bg-slate-800 shadow-md">
+        <h1 class="text-2xl font-bold text-center">My Kanban Board</h1>
+    </header>
+
+    <section class="p-4 flex items-center space-x-2 bg-slate-900">
+        <input type="text" id="newListName" placeholder="Enter new list name..." class="flex-grow p-2 rounded bg-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <button id="addListBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150 ease-in-out">
+            Add List
+        </button>
+    </section>
+
+    <main id="listsContainer" class="flex-grow p-4 space-x-4">
+        </main>
+
+    <script>
+        // DOM Elements
+        const listsContainer = document.getElementById('listsContainer');
+        const addListBtn = document.getElementById('addListBtn');
+        const newListNameInput = document.getElementById('newListName');
+
+        // State
+        let boardState = JSON.parse(localStorage.getItem('kanbanBoardState')) || [];
+        let draggedTask = null;
+        let draggedList = null; // To track the list being dragged
+        let placeholder = null; // Placeholder element for list dragging visualization
+
+        // --- Core Functions ---
+
+        function saveState() {
+            localStorage.setItem('kanbanBoardState', JSON.stringify(boardState));
+            console.log("State saved:", boardState);
+        }
+
+        function renderBoard() {
+            listsContainer.innerHTML = ''; // Clear existing lists
+            boardState.forEach((listData, listIndex) => {
+                const listElement = createListElement(listData.name, listIndex);
+                listData.tasks.forEach((taskText, taskIndex) => {
+                    const taskElement = createTaskElement(taskText, listIndex, taskIndex);
+                    listElement.querySelector('.tasks-container').appendChild(taskElement);
+                });
+                listsContainer.appendChild(listElement);
+            });
+            // Add list drag/drop listeners after rendering lists
+            addListDragDropListeners();
+            console.log("Board rendered");
+        }
+
+        /**
+         * Creates a new list element.
+         * @param {string} name - The name of the list.
+         * @param {number} listIndex - The index of the list in the boardState.
+         * @returns {HTMLElement} The created list element.
+         */
+        function createListElement(name, listIndex) {
+            const listDiv = document.createElement('div');
+            // Added 'kanban-list-draggable' for list drag identification
+            listDiv.className = 'kanban-list bg-slate-800 rounded-lg p-4 shadow-md flex flex-col space-y-4 kanban-list-draggable';
+            listDiv.dataset.listIndex = listIndex;
+            listDiv.draggable = true; // Make the list itself draggable
+
+            listDiv.innerHTML = `
+                <div class="list-header flex justify-between items-center pb-2 border-b border-slate-700">
+                    <h2 class="text-lg font-semibold text-center flex-grow">${name}</h2>
+                    <button class="delete-list-btn text-slate-500 hover:text-red-500 transition duration-150 ease-in-out ml-2">
+                        <i class="fas fa-times-circle fa-sm"></i> </button>
+                </div>
+                <div class="tasks-container flex-grow space-y-2 min-h-[50px]">
+                    </div>
+                <div class="mt-auto pt-2">
+                    <input type="text" placeholder="New task..." class="w-full p-2 rounded bg-slate-700 text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 mb-2 newTaskInput">
+                    <button class="w-full bg-pink-500 hover:bg-pink-600 text-white font-bold py-1 px-3 rounded text-sm addTaskBtn transition duration-150 ease-in-out">
+                        Add Task
+                    </button>
+                </div>
+            `;
+
+            // --- Event Listeners for the new list ---
+            const addTaskBtn = listDiv.querySelector('.addTaskBtn');
+            const newTaskInput = listDiv.querySelector('.newTaskInput');
+            const tasksContainer = listDiv.querySelector('.tasks-container');
+            const deleteListBtn = listDiv.querySelector('.delete-list-btn');
+            // const listHeader = listDiv.querySelector('.list-header'); // Drag handle
+
+            // Add Task Button
+            addTaskBtn.addEventListener('click', () => handleAddTask(listIndex, newTaskInput));
+            newTaskInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') handleAddTask(listIndex, newTaskInput);
+            });
+
+            // Delete List Button
+            deleteListBtn.addEventListener('click', (e) => {
+                 e.stopPropagation(); // Prevent drag start when clicking delete
+                 deleteList(listIndex, name);
+            });
+
+            // Task Drag and Drop Listeners (within the list's task container)
+            tasksContainer.addEventListener('dragover', handleTaskDragOver);
+            tasksContainer.addEventListener('dragenter', handleTaskDragEnter);
+            tasksContainer.addEventListener('dragleave', handleTaskDragLeave);
+            tasksContainer.addEventListener('drop', handleTaskDrop);
+
+            // Prevent list drag from starting when interacting with inputs/buttons inside
+             listDiv.querySelectorAll('input, button').forEach(el => {
+                el.addEventListener('mousedown', e => e.stopPropagation());
+             });
+
+
+            return listDiv;
+        }
+
+        /**
+         * Creates a new task element.
+         * @param {string} text - The content of the task.
+         * @param {number} listIndex - The index of the list this task belongs to.
+         * @param {number} taskIndex - The index of the task within its list.
+         * @returns {HTMLElement} The created task element.
+         */
+        function createTaskElement(text, listIndex, taskIndex) {
+            const taskDiv = document.createElement('div');
+            taskDiv.className = 'bg-slate-700 p-3 rounded shadow cursor-grab active:cursor-grabbing flex justify-between items-center task';
+            taskDiv.draggable = true;
+            taskDiv.dataset.listIndex = listIndex;
+            taskDiv.dataset.taskIndex = taskIndex;
+
+            taskDiv.innerHTML = `
+                <span class="task-text flex-grow mr-2">${text}</span>
+                <button class="delete-task-btn text-slate-400 hover:text-red-500 transition duration-150 ease-in-out">
+                    <i class="fas fa-trash-alt fa-xs"></i> </button>
+            `;
+
+            // Task Event Listeners
+            taskDiv.addEventListener('dragstart', handleTaskDragStart);
+            taskDiv.addEventListener('dragend', handleTaskDragEnd);
+            taskDiv.querySelector('.delete-task-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteTask(listIndex, taskIndex);
+            });
+
+            return taskDiv;
+        }
+
+        // --- Action Functions ---
+
+        function addList(name) {
+            boardState.push({ name: name, tasks: [] });
+            saveState();
+            renderBoard();
+            console.log(`List "${name}" added`);
+        }
+
+        function handleAddTask(listIndex, inputElement) {
+             const taskText = inputElement.value.trim();
+             if (taskText) {
+                 addTask(listIndex, taskText);
+                 inputElement.value = ''; // Clear input
+             } else {
+                 alert("Task cannot be empty!");
+             }
+        }
+
+        function addTask(listIndex, taskText) {
+            if (boardState[listIndex]) {
+                boardState[listIndex].tasks.push(taskText);
+                saveState();
+                renderBoard(); // Re-render needed for correct indices
+                console.log(`Task "${taskText}" added to list ${listIndex}`);
+            } else {
+                console.error("Add task error: List index not found:", listIndex);
+            }
+        }
+
+         function deleteTask(listIndex, taskIndex) {
+             if (boardState[listIndex] && boardState[listIndex].tasks[taskIndex] !== undefined) {
+                const taskText = boardState[listIndex].tasks[taskIndex];
+                if (confirm(`Are you sure you want to delete task: "${taskText}"?`)) {
+                    boardState[listIndex].tasks.splice(taskIndex, 1);
+                    saveState();
+                    renderBoard(); // Re-render needed
+                    console.log(`Task "${taskText}" deleted from list ${listIndex}`);
+                }
+            } else {
+                 console.error("Delete task error: Task not found at:", listIndex, taskIndex);
+            }
+        }
+
+        function deleteList(listIndex, listName) {
+             if (boardState[listIndex]) {
+                 if (confirm(`Are you sure you want to delete the list "${listName}" and all its tasks?`)) {
+                    boardState.splice(listIndex, 1);
+                    saveState();
+                    renderBoard(); // Re-render needed
+                    console.log(`List "${listName}" (index ${listIndex}) deleted`);
+                 }
+             } else {
+                 console.error("Delete list error: List index not found:", listIndex);
+             }
+        }
+
+
+        function moveTask(fromListIndex, fromTaskIndex, toListIndex, toTaskIndex = null) {
+            if (
+                boardState[fromListIndex]?.[fromTaskIndex] !== undefined &&
+                boardState[toListIndex]
+            ) {
+                const [taskToMove] = boardState[fromListIndex].tasks.splice(fromTaskIndex, 1);
+
+                if (toTaskIndex === null || toTaskIndex > boardState[toListIndex].tasks.length) {
+                    // Append to end if index is null or out of bounds
+                    boardState[toListIndex].tasks.push(taskToMove);
+                    console.log(`Task moved from ${fromListIndex} to end of ${toListIndex}`);
+                } else {
+                    // Insert at specific index
+                    boardState[toListIndex].tasks.splice(toTaskIndex, 0, taskToMove);
+                    console.log(`Task moved from ${fromListIndex} to ${toListIndex} at index ${toTaskIndex}`);
+                }
+
+                saveState();
+                renderBoard();
+            } else {
+                 console.error("Invalid move task operation:", { fromListIndex, fromTaskIndex, toListIndex, toTaskIndex });
+            }
+        }
+
+        function moveList(fromListIndex, toListIndex) {
+            if (fromListIndex === toListIndex || boardState[fromListIndex] === undefined) {
+                console.log("List move cancelled or invalid.");
+                return; // No move needed or invalid index
+            }
+
+            const [listToMove] = boardState.splice(fromListIndex, 1);
+
+            // Adjust target index if moving leftwards
+            const adjustedToListIndex = fromListIndex < toListIndex ? toListIndex -1 : toListIndex;
+
+            boardState.splice(adjustedToListIndex, 0, listToMove);
+            console.log(`List moved from index ${fromListIndex} to ${adjustedToListIndex}`);
+
+            saveState();
+            renderBoard(); // Re-render to reflect new list order and update indices
+        }
+
+
+        // --- Task Drag and Drop Handlers ---
+
+        function handleTaskDragStart(e) {
+            if (e.target.classList.contains('task')) {
+                draggedTask = e.target;
+                e.dataTransfer.setData('text/plain', e.target.dataset.taskIndex); // Can store task data if needed
+                e.dataTransfer.effectAllowed = 'move';
+                setTimeout(() => e.target.classList.add('dragging'), 0);
+                console.log("Task Drag Start:", draggedTask.dataset.listIndex, draggedTask.dataset.taskIndex);
+            } else {
+                e.preventDefault(); // Prevent dragging if not a task
+            }
+        }
+
+        function handleTaskDragEnd(e) {
+            if (draggedTask && e.target.classList.contains('task')) {
+                e.target.classList.remove('dragging');
+                document.querySelectorAll('.tasks-container.drag-over').forEach(el => el.classList.remove('drag-over'));
+                console.log("Task Drag End");
+            }
+            draggedTask = null;
+        }
+
+        function handleTaskDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const dropZone = e.target.closest('.tasks-container');
+            if (dropZone && !dropZone.classList.contains('drag-over')) {
+                 document.querySelectorAll('.tasks-container.drag-over').forEach(el => el.classList.remove('drag-over'));
+                 dropZone.classList.add('drag-over');
+            }
+        }
+
+        function handleTaskDragEnter(e) {
+            e.preventDefault();
+            const dropZone = e.target.closest('.tasks-container');
+             if (dropZone) {
+                 dropZone.classList.add('drag-over');
+             }
+        }
+
+        function handleTaskDragLeave(e) {
+             const dropZone = e.target.closest('.tasks-container');
+             if (dropZone && e.relatedTarget && !dropZone.contains(e.relatedTarget)) {
+                 dropZone.classList.remove('drag-over');
+             } else if (!e.relatedTarget && dropZone) {
+                 dropZone.classList.remove('drag-over');
+             }
+        }
+
+        function handleTaskDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const dropZoneContainer = e.target.closest('.tasks-container');
+            const targetListElement = e.target.closest('.kanban-list');
+
+            if (dropZoneContainer && targetListElement && draggedTask) {
+                dropZoneContainer.classList.remove('drag-over');
+
+                const fromListIndex = parseInt(draggedTask.dataset.listIndex);
+                const fromTaskIndex = parseInt(draggedTask.dataset.taskIndex);
+                const toListIndex = parseInt(targetListElement.dataset.listIndex);
+
+                // Determine target task index
+                const targetTaskElement = e.target.closest('.task:not(.dragging)'); // Don't target self
+                let toTaskIndex = null;
+
+                if (targetTaskElement) {
+                    // Dropped onto another task, calculate if dropping before or after
+                     const rect = targetTaskElement.getBoundingClientRect();
+                     const isAfter = e.clientY > rect.top + rect.height / 2;
+                     toTaskIndex = parseInt(targetTaskElement.dataset.taskIndex) + (isAfter ? 1 : 0);
+
+                } else {
+                    // Dropped onto the container (empty space)
+                    // Find the task element we are hovering *closest* to vertically
+                    const tasksInZone = Array.from(dropZoneContainer.querySelectorAll('.task:not(.dragging)'));
+                    const mouseY = e.clientY;
+                    let closestTask = null;
+                    let minDistance = Infinity;
+
+                    tasksInZone.forEach(task => {
+                        const rect = task.getBoundingClientRect();
+                        const distance = Math.abs(mouseY - (rect.top + rect.height / 2));
+                        if (distance < minDistance) {
+                            minDistance = distance;
+                            closestTask = task;
+                        }
+                    });
+
+                    if (closestTask) {
+                        const rect = closestTask.getBoundingClientRect();
+                        const isAfter = mouseY > rect.top + rect.height / 2;
+                        toTaskIndex = parseInt(closestTask.dataset.taskIndex) + (isAfter ? 1 : 0);
+                    } else {
+                        // If container is empty or calculation fails, append to end
+                        toTaskIndex = boardState[toListIndex].tasks.length;
+                    }
+                }
+
+                 // Adjust index if moving within the same list downwards
+                 if (fromListIndex === toListIndex && fromTaskIndex < toTaskIndex) {
+                    toTaskIndex--; // Account for the removed item shifting indices
+                 }
+
+
+                console.log("Task Drop:", { fromListIndex, fromTaskIndex, toListIndex, toTaskIndex });
+                moveTask(fromListIndex, fromTaskIndex, toListIndex, toTaskIndex);
+
+            } else {
+                console.log("Task drop rejected.");
+                document.querySelectorAll('.tasks-container.drag-over').forEach(el => el.classList.remove('drag-over'));
+            }
+             if (draggedTask) draggedTask.classList.remove('dragging');
+            draggedTask = null;
+        }
+
+
+        // --- List Drag and Drop Handlers ---
+
+        function addListDragDropListeners() {
+            const lists = listsContainer.querySelectorAll('.kanban-list-draggable');
+            lists.forEach(list => {
+                // Use mousedown on the header to initiate potential drag, but full logic in dragstart
+                // list.querySelector('.list-header').addEventListener('mousedown', () => { /* Can add visual cue */ });
+
+                list.addEventListener('dragstart', handleListDragStart);
+                list.addEventListener('dragend', handleListDragEnd);
+                // Drag over/enter/leave/drop listeners are on the main container
+            });
+
+             // Add listeners to the main container for list dropping
+            listsContainer.addEventListener('dragover', handleListDragOver);
+            listsContainer.addEventListener('dragenter', handleListDragEnter); // Less critical if using placeholder
+            listsContainer.addEventListener('dragleave', handleListDragLeave);
+            listsContainer.addEventListener('drop', handleListDrop);
+        }
+
+
+        function handleListDragStart(e) {
+            // Only allow dragging if the target is the list itself or its header, not inputs/buttons/tasks
+            if (!e.target.classList.contains('kanban-list-draggable') && !e.target.closest('.list-header')) {
+                 e.preventDefault();
+                 console.log("List drag prevented on inner element.");
+                 return;
+            }
+            // Ensure we are targeting the main list element for data
+            const listElement = e.target.closest('.kanban-list-draggable');
+            if (!listElement || draggedTask) { // Don't allow list drag if a task is already being dragged
+                 e.preventDefault();
+                 return;
+            }
+
+            draggedList = listElement;
+            e.dataTransfer.setData('text/plain', listElement.dataset.listIndex);
+            e.dataTransfer.effectAllowed = 'move';
+
+            // Create placeholder after a short delay
+            setTimeout(() => {
+                if (!draggedList) return; // Check if drag was cancelled quickly
+                draggedList.classList.add('dragging-list');
+                createPlaceholder(); // Create and insert the visual placeholder
+                positionPlaceholder(e.clientX); // Initial positioning
+            }, 0);
+
+            console.log("List Drag Start:", draggedList.dataset.listIndex);
+        }
+
+        function handleListDragEnd(e) {
+            if (!draggedList) return;
+            draggedList.classList.remove('dragging-list');
+            removePlaceholder(); // Clean up placeholder
+            console.log("List Drag End");
+            draggedList = null;
+        }
+
+        function handleListDragOver(e) {
+            e.preventDefault(); // Necessary to allow dropping
+            if (!draggedList) return; // Only handle when a list is being dragged
+
+            e.dataTransfer.dropEffect = 'move';
+            positionPlaceholder(e.clientX); // Update placeholder position based on cursor
+        }
+
+         function handleListDragEnter(e) {
+             e.preventDefault(); // Good practice
+             // Can add a general highlight to the container if desired
+             // listsContainer.classList.add('list-drag-active-zone');
+         }
+
+         function handleListDragLeave(e) {
+             // If leaving the container entirely, might want to remove placeholder
+             if (e.target === listsContainer && !listsContainer.contains(e.relatedTarget)) {
+                 // removePlaceholder(); // Or let dragend handle it
+                 // listsContainer.classList.remove('list-drag-active-zone');
+             }
+         }
+
+
+        function handleListDrop(e) {
+            e.preventDefault();
+            e.stopPropagation(); // Prevent triggering other drop listeners
+
+            if (!draggedList || !placeholder) {
+                console.log("List drop rejected: No list was being dragged or placeholder missing.");
+                removePlaceholder(); // Clean up just in case
+                if(draggedList) draggedList.classList.remove('dragging-list');
+                draggedList = null;
+                return;
+            }
+
+            const fromListIndex = parseInt(draggedList.dataset.listIndex);
+            // Determine target index based on placeholder's final position
+            const children = Array.from(listsContainer.children);
+            const toListIndex = children.indexOf(placeholder); // Index where the placeholder ended up
+
+            console.log("List Drop:", { fromListIndex, toListIndex });
+
+            // Perform the move in the state
+            moveList(fromListIndex, toListIndex); // moveList handles state update and re-render
+
+            // Clean up handled by renderBoard and dragEnd
+             removePlaceholder(); // Explicitly remove here too
+             draggedList.classList.remove('dragging-list'); // Ensure class is removed
+             draggedList = null;
+        }
+
+        // --- Placeholder Utilities for List Dragging ---
+
+        function createPlaceholder() {
+            if (placeholder) removePlaceholder(); // Remove existing if any
+            placeholder = document.createElement('div');
+            placeholder.className = 'drop-placeholder';
+            // Match height of the dragged list? Or fixed height?
+            if (draggedList) {
+                 placeholder.style.height = `${draggedList.offsetHeight}px`; // Match height
+            }
+        }
+
+        function removePlaceholder() {
+            if (placeholder && placeholder.parentNode) {
+                placeholder.parentNode.removeChild(placeholder);
+            }
+            placeholder = null;
+        }
+
+        function positionPlaceholder(clientX) {
+            if (!placeholder || !draggedList) return;
+
+            const currentLists = Array.from(listsContainer.querySelectorAll('.kanban-list-draggable:not(.dragging-list)'));
+            let insertBeforeElement = null;
+
+            for (const list of currentLists) {
+                const rect = list.getBoundingClientRect();
+                // Find the first list whose midpoint is to the right of the cursor
+                if (clientX < rect.left + rect.width / 2) {
+                    insertBeforeElement = list;
+                    break;
+                }
+            }
+
+            // Insert placeholder logic
+            if (insertBeforeElement) {
+                // Insert placeholder before the target element if it's not already there
+                if (placeholder.previousSibling !== insertBeforeElement.previousSibling) {
+                     listsContainer.insertBefore(placeholder, insertBeforeElement);
+                }
+            } else {
+                // Insert placeholder at the end if no element found to insert before,
+                // and if it's not already the last element (excluding the dragged one)
+                if (listsContainer.lastChild !== placeholder && listsContainer.lastChild !== draggedList) {
+                    listsContainer.appendChild(placeholder);
+                } else if (listsContainer.lastChild === draggedList && placeholder.previousSibling !== draggedList.previousSibling) {
+                     // Special case if dragging the last item, put placeholder before it
+                     listsContainer.insertBefore(placeholder, draggedList);
+                }
+            }
+        }
+
+
+        // --- Initial Setup ---
+
+        addListBtn.addEventListener('click', () => {
+            const listName = newListNameInput.value.trim();
+            if (listName) {
+                addList(listName);
+                newListNameInput.value = '';
+            } else {
+                alert("List name cannot be empty!");
+            }
+        });
+
+        newListNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                 const listName = newListNameInput.value.trim();
+                 if (listName) {
+                    addList(listName);
+                    newListNameInput.value = '';
+                 } else {
+                    alert("List name cannot be empty!");
+                 }
+            }
+        });
+
+        // Initial render on page load
+        document.addEventListener('DOMContentLoaded', renderBoard);
+
+    </script>
+
+</body>
+</html>
